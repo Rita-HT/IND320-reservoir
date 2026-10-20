@@ -1,289 +1,77 @@
+# Imports the libraries needed
 import pandas as pd
-import streamlit as st
 import matplotlib.pyplot as plt
 import requests
-
-
-# Loads data from the NVE API
-@st.cache_data(ttl=3600)
-def load_data():
-
-    # URL for the NVE API
-    url = (
-        "https://biapi.nve.no/magasinstatistikk/"
-        "api/Magasinstatistikk/HentOffentligData"
-    )
-
-    # Sends a request and checks for errors
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-
-    # Converts the API response into a Df
-    data = pd.DataFrame(response.json())
-
-    # Renames columns to English
-    data = data.rename(columns={
-        "dato_Id": "Date",
-        "omrType": "Area_type",
-        "omrnr": "Area_number",
-        "iso_aar": "Iso_yr",
-        "iso_uke": "Iso_week",
-        "fyllingsgrad": "Fill_lvl",
-        "kapasitet_TWh": "Capacity_TWh",
-        "fylling_TWh": "Fill_TWh",
-        "neste_Publiseringsdato": "Nxt_pubDate",
-        "fyllingsgrad_forrige_uke": "Fill_lvl_Lstweek",
-        "endring_fyllingsgrad": "Diff_Fill_lvl"
-    })
-
-    # Checks that the required columns are available
-    required_columns = [
-        "Date",
-        "Area_type",
-        "Area_number",
-        "Fill_lvl"
-    ]
-
-    missing_columns = [
-        column for column in required_columns
-        if column not in data.columns
-    ]
-
-    if missing_columns:
-        raise ValueError(
-            "Missing expected NVE columns: "
-            + ", ".join(missing_columns)
-        )
-
-    # Converts the dates to date format
-    data["Date"] = pd.to_datetime(
-        data["Date"],
-        errors="coerce"
-    )
-
-    # Converts the measurement columns to numbers
-    numeric_columns = [
-        "Fill_lvl",
-        "Capacity_TWh",
-        "Fill_TWh",
-        "Fill_lvl_Lstweek",
-        "Diff_Fill_lvl"
-    ]
-
-    for column in numeric_columns:
-        if column in data.columns:
-            data[column] = pd.to_numeric(
-                data[column],
-                errors="coerce"
-            )
-
-    # area types and numbers use text format
-    data["Area_type"] = (
-        data["Area_type"].astype(str).str.strip()
-    )
-    data["Area_number"] = data["Area_number"].astype(str)
-
-    # Combines the area type and number into one column
-    data["Area"] = (
-        data["Area_type"] + data["Area_number"]
-    )
-
-    # Creates a column showing the month of each observation
-    data["Month"] = data["Date"].dt.to_period("M").astype(str)
-
-    # Sorts by area and date
-    data = data.sort_values(["Area", "Date"])
-
-    return data
-
-
-# Shows the page title
+import streamlit as st
+ 
+from nve_data import NUMERIC_COLUMNS, interval_slider, load_data
+ 
 st.title("Visualisation of the reservoir")
-
+ 
 try:
-    # Loads data from the NVE API
-    data = load_data()
-
-    # Checks if the API returned any data
-    if data.empty:
-        st.warning("No reservoir data available.")
-        st.stop()
-
-    # Removes rows without a valid date or area
-    data = data.dropna(
-        subset=["Date", "Area_type", "Area_number"]
-    ).copy()
-
-    # Finds the area types available in the data
-    available_types = sorted(data["Area_type"].unique())
-
-    # Uses the area types listed in the assignment
-    preferred_types = ["EL", "NO", "VASS"]
-    area_types = [
-        area_type for area_type in preferred_types
-        if area_type in available_types
-    ]
-
-    # Uses the available types if the expected types are missing
-    if not area_types:
-        area_types = available_types
-
-    # Lets the user choose an area type
-    selected_area_type = st.radio(
-        "Area type",
-        area_types,
-        horizontal=True
-    )
-
-    # Keeps only data for the selected area type
-    area_data = data[
-        data["Area_type"] == selected_area_type
-    ].copy()
-
-    # Finds the months available for the selected area type
-    available_months = sorted(
-        area_data["Month"].dropna().unique()
-    )
-
-    # Stops if there are no valid months
-    if not available_months:
-        st.warning("No valid dates available.")
-        st.stop()
-
-    # Lets the user choose the time interval
-    start_month, end_month = st.select_slider(
-        "Time interval",
-        options=available_months,
-        value=(available_months[0], available_months[-1])
-    )
-
-    # Keeps only data within the selected time interval
-    mask = (
-        (area_data["Month"] >= start_month)
-        & (area_data["Month"] <= end_month)
-    )
-
-    plot_data = area_data[mask].copy()
-
-    # Checks if data is available for the selected interval
+    # Radio buttons: choose the type of area (one line per area number)
+    selected_area_type = st.radio("Area type", ["EL", "NO", "VASS"], horizontal=True)
+ 
+    # Slider: same download interval as on page 2
+    start_month, end_month = interval_slider()
+    data = load_data(start_month, end_month)
+ 
+    # Keep only the chosen area type
+    plot_data = data[data["Area_type"] == selected_area_type].copy()
     if plot_data.empty:
-        st.warning("No data available for this time interval.")
+        st.warning("No data for this choice.")
         st.stop()
-
-    # Finds the numerical columns that can be plotted
-    numeric_columns = [
-        column for column in [
-            "Fill_lvl",
-            "Capacity_TWh",
-            "Fill_TWh",
-            "Fill_lvl_Lstweek",
-            "Diff_Fill_lvl"
-        ]
-        if column in plot_data.columns
-        and plot_data[column].notna().any()
-    ]
-
-    # Stops if there are no numerical values to plot
-    if not numeric_columns:
-        st.warning("No numerical data available to plot.")
-        st.stop()
-
-    # Lets the user choose which value to display
-    selected_column = st.selectbox(
-        "Column",
-        numeric_columns + ["All columns"]
-    )
-
-    # Creates the plot
+ 
+    # Find the columns that have values we can plot
+    numeric_columns = [c for c in NUMERIC_COLUMNS
+                       if c in plot_data.columns and plot_data[c].notna().any()]
+    selected_column = st.selectbox("Column", numeric_columns + ["All columns"])
+ 
     fig, ax = plt.subplots(figsize=(10, 5))
-
+ 
     if selected_column == "All columns":
-
-        # Copies the values before normalising them
-        plot_values = plot_data[numeric_columns].copy()
-
-        # Scales the values between 0 and 1
+        # Scale every column to 0-1, so they fit on the same axis
+        values = plot_data[numeric_columns].copy()
         for column in numeric_columns:
-            minimum = plot_values[column].min()
-            maximum = plot_values[column].max()
-
-            if maximum > minimum:
-                plot_values[column] = (
-                    (plot_values[column] - minimum)
-                    / (maximum - minimum)
-                )
-            else:
-                plot_values[column] = 0
-
-        # Draws a separate line for each area and column
-        for area, area_rows in plot_data.groupby("Area"):
-            area_rows = area_rows.sort_values("Date")
-
+            low, high = values[column].min(), values[column].max()
+            values[column] = (values[column] - low) / (high - low) if high > low else 0
+        # Draw one line for each area and column
+        for area, rows in plot_data.groupby("Area"):
+            rows = rows.sort_values("Date")
             for column in numeric_columns:
-                ax.plot(
-                    area_rows["Date"],
-                    plot_values.loc[area_rows.index, column],
-                    marker="o",
-                    label=f"{area} - {column}"
-                )
-
-        # Labels the axis for normalised values
-        ax.set_ylabel("Normalised value (0-1)")
-
+                ax.plot(rows["Date"], values.loc[rows.index, column],
+                        linewidth=0.8, label=f"{area} - {column}")
+        ax.set_ylabel("Scaled value (0-1)")
     else:
-
-        # Draws a separate line for each area number
-        for area, area_rows in plot_data.groupby("Area"):
-            area_rows = area_rows.sort_values("Date")
-
-            ax.plot(
-                area_rows["Date"],
-                area_rows[selected_column],
-                marker="o",
-                label=area
-            )
-
-        # Labels the axis with the selected column
+        # Draw one line for each area number
+        for area, rows in plot_data.groupby("Area"):
+            rows = rows.sort_values("Date")
+            ax.plot(rows["Date"], rows[selected_column], linewidth=1.0, label=area)
         ax.set_ylabel(selected_column)
-
-    # Adds the chart title and axis labels
-    ax.set_title(
-        f"{selected_column} - {selected_area_type} "
-        f"({start_month} to {end_month})"
-    )
+ 
+    # Title, labels and legend
+    ax.set_title(f"{selected_column} - {selected_area_type} ({start_month} to {end_month})")
     ax.set_xlabel("Date")
-
-    # Shows a legend for the different lines
-    ax.legend(fontsize=8)
-
-    # Adjusts the date labels and chart layout
+    ax.legend(fontsize=7, ncol=2)
     fig.autofmt_xdate()
     plt.tight_layout()
-
-    # Displays the plot in Streamlit
+ 
+    # Show the plot in Streamlit
     st.pyplot(fig)
     plt.close(fig)
-
-    # Shows the data used in the plot
+ 
+    # Extra information the user can open
     with st.expander("View data"):
-        st.dataframe(plot_data, use_container_width=True)
-
-    # Shows links to the data sources
+        st.dataframe(plot_data, width="stretch")
+ 
     with st.expander("Data source"):
-        st.markdown(
-            "[NVE Reservoir Statistics API]"
-            "(https://biapi.nve.no/magasinstatistikk/swagger/index.html)"
-        )
-
-        st.markdown(
-            "[NVE Reservoir Statistics]"
-            "(https://www.nve.no/energi/analyser-og-statistikk/magasinstatistikk/)"
-        )
-
+        st.markdown("[NVE Reservoir Statistics API]"
+                    "(https://biapi.nve.no/magasinstatistikk/swagger/index.html)")
+        st.markdown("[NVE Reservoir Statistics]"
+                    "(https://www.nve.no/energi/analyser-og-statistikk/magasinstatistikk/)")
+ 
+# Warning if something goes wrong
 except requests.RequestException as error:
-    # Shows an error if the API request fails
-    st.error(f"Could not retrieve data from NVE: {error}")
-
+    st.error(f"Could not get data from NVE: {error}")
 except (ValueError, KeyError, TypeError) as error:
-    # Shows an error if the data cannot be processed
     st.error(f"Could not process the NVE data: {error}")
