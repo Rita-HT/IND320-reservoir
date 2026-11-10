@@ -122,7 +122,7 @@ with tab_lof:
     )
 
     # Show the plot on the page
-    st.pyplot(figure)
+    st.pyplot(figure) 
 
     # Show the summary numbers
     st.json(summary)
