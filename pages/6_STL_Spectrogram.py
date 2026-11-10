@@ -61,7 +61,7 @@ tab_stl, tab_spec = st.tabs(["STL", "Spectrogram"])
 # Tab 1: STL decomposition with adjustable smoothers
 with tab_stl:
     # Slider for how fast the seasonal pattern may change
-        seasonal = st.slider(
+    seasonal = st.slider(
         "Seasonal smoother (odd)", 7, 77, 15, step=2
     )
 
